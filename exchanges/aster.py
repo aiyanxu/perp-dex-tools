@@ -808,11 +808,21 @@ class AsterClient(BaseExchangeClient):
         try:
             result = await self._public_request('GET', '/fapi/v3/exchangeInfo')
 
-            for symbol_info in result['symbols']:
-                if (symbol_info.get('status') == 'TRADING' and
-                        symbol_info.get('baseAsset') == ticker and
-                        symbol_info.get('quoteAsset') == 'USDT'):
+            trading_symbols = [s for s in result['symbols'] if s.get('status') == 'TRADING']
 
+            # Prefer an exact exchange-symbol match (e.g. XAUUSD1, quoted in
+            # USD1); fall back to base-asset + USDT (ETH -> ETHUSDT).
+            matched = next((s for s in trading_symbols if s.get('symbol') == ticker), None)
+            if matched is None:
+                matched = next(
+                    (s for s in trading_symbols
+                     if s.get('baseAsset') == ticker and s.get('quoteAsset') == 'USDT'),
+                    None
+                )
+            candidates = [matched] if matched is not None else []
+
+            for symbol_info in result['symbols']:
+                if symbol_info in candidates:
                     self.config.contract_id = symbol_info.get('symbol', '')
 
                     # Get tick size from filters
