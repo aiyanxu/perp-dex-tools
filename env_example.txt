@@ -26,8 +26,12 @@ GRVT_API_KEY=your_api_key_here
 GRVT_ENVIRONMENT=prod # or testnet/staging/dev 
 
 # Aster Configuration
-ASTER_API_KEY=your_aster_api_key
-ASTER_SECRET_KEY=your_aster_secret_key
+# Aster Futures V3 "API wallet" auth: ASTER_ACCOUNT_ADDRESS is the master
+# account (login) wallet address; ASTER_PRIVATE_KEY is the private key of the
+# API wallet registered under it (asterdex.com -> "API Wallet" / "Pro API").
+# The request signer address is derived from ASTER_PRIVATE_KEY.
+ASTER_ACCOUNT_ADDRESS=your_account_wallet_address_here
+ASTER_PRIVATE_KEY=your_api_wallet_private_key_here
 
 # Lighter Configuration
 API_KEY_PRIVATE_KEY=your_api_key_private_key_here

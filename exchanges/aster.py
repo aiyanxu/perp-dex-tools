@@ -1,79 +1,172 @@
 """
 Aster exchange client implementation.
+
+Authentication follows the Aster Futures V3 "API wallet / agent" model
+(https://github.com/asterdex/api-docs/blob/master/Aster%20API%20Overview.md):
+
+- ``ASTER_ACCOUNT_ADDRESS``  master account (login) wallet address -> request ``user``
+- ``ASTER_PRIVATE_KEY``      API wallet private key; the derived address is the
+                            request ``signer`` and signs every request (EIP-712,
+                            keccak over the urlencoded parameter string).
+
+Signed endpoints live under ``/fapi/v3/*`` on ``https://fapi.asterdex.com``.
+Public market data endpoints do not require a signature.
 """
 
 import os
+import re
 import asyncio
 import json
 import time
-import hmac
-import hashlib
+import sys
+import threading
 from decimal import Decimal
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlencode
+
 import aiohttp
 import websockets
-import sys
+
+from eth_account import Account
+from eth_account.messages import encode_typed_data
+from eth_utils import to_checksum_address
 
 from .base import BaseExchangeClient, OrderResult, OrderInfo, query_retry
 from helpers.logger import TradingLogger
 
 
+ASTER_BASE_URL = 'https://fapi.asterdex.com'
+ASTER_WS_URL = 'wss://fstream.asterdex.com'
+ASTER_CHAIN_ID = 1666  # Aster L1 mainnet chain id used in the EIP-712 domain
+
+_ADDRESS_RE = re.compile(r'^0x[0-9a-fA-F]{40}$')
+
+
+def _build_signing_message(payload: str) -> Dict[str, Any]:
+    """Build the EIP-712 typed-data envelope Aster V3 signs over ``payload``."""
+    return {
+        'types': {
+            'EIP712Domain': [
+                {'name': 'name', 'type': 'string'},
+                {'name': 'version', 'type': 'string'},
+                {'name': 'chainId', 'type': 'uint256'},
+                {'name': 'verifyingContract', 'type': 'address'},
+            ],
+            'Message': [{'name': 'msg', 'type': 'string'}],
+        },
+        'primaryType': 'Message',
+        'domain': {
+            'name': 'AsterSignTransaction',
+            'version': '1',
+            'chainId': ASTER_CHAIN_ID,
+            'verifyingContract': '0x0000000000000000000000000000000000000000',
+        },
+        'message': {'msg': payload},
+    }
+
+
+class AsterSigner:
+    """Signs Aster Futures V3 requests with the API wallet private key.
+
+    ``account_address`` is the master account wallet (the ``user`` parameter);
+    the ``signer`` parameter is derived from ``private_key`` (the API wallet),
+    matching Aster's model where the private key corresponds to the signer.
+    """
+
+    def __init__(self, account_address: str, private_key: str) -> None:
+        account_address = (account_address or '').strip()
+        private_key = (private_key or '').strip()
+
+        if not _ADDRESS_RE.match(account_address):
+            raise ValueError(
+                f"ASTER_ACCOUNT_ADDRESS is not a valid address: {account_address!r}"
+            )
+        try:
+            self.account = Account.from_key(private_key)
+        except Exception as e:
+            raise ValueError(
+                "ASTER_PRIVATE_KEY is not a valid private key"
+            ) from e
+
+        self.user = to_checksum_address(account_address)
+        self.signer = self.account.address
+        self.private_key = private_key
+
+        self._last_nonce = 0
+        self._nonce_lock = threading.Lock()
+
+    def _next_nonce(self) -> int:
+        """Monotonic microsecond timestamp, unique per signer.
+
+        The server accepts nonces within a 60 s window around its own time and
+        rejects duplicates (tracked per agent/signer address).
+        """
+        with self._nonce_lock:
+            nonce = int(time.time() * 1_000_000)
+            if nonce <= self._last_nonce:
+                nonce = self._last_nonce + 1
+            self._last_nonce = nonce
+            return nonce
+
+    def sign(self, params: Dict[str, Any]) -> Tuple[str, str]:
+        """Attach nonce/user/signer to ``params`` and ECDSA-sign the encoding.
+
+        Returns ``(query_string, signature_hex)`` where ``query_string`` is the
+        urlencoded parameter string that was signed (signature excluded).
+        """
+        payload = dict(params)
+        payload['nonce'] = str(self._next_nonce())
+        payload['user'] = self.user
+        payload['signer'] = self.signer
+
+        query_string = urlencode(payload)
+        message = encode_typed_data(full_message=_build_signing_message(query_string))
+        signature = Account.sign_message(message, private_key=self.private_key).signature.hex()
+        return query_string, signature
+
+
 class AsterWebSocketManager:
     """WebSocket manager for Aster order updates."""
 
-    def __init__(self, config: Dict[str, Any], api_key: str, secret_key: str, order_update_callback):
-        self.api_key = api_key
-        self.secret_key = secret_key
+    def __init__(self, config: Dict[str, Any], signer: AsterSigner, order_update_callback):
+        self.signer = signer
         self.order_update_callback = order_update_callback
         self.websocket = None
         self.running = False
-        self.base_url = "https://fapi.asterdex.com"
-        self.ws_url = "wss://fstream.asterdex.com"
+        self.base_url = ASTER_BASE_URL
+        self.ws_url = ASTER_WS_URL
         self.listen_key = None
         self.logger = None
         self._keepalive_task = None
         self._last_ping_time = None
+        self._last_keepalive_time = None
         self.config = config
 
-    def _generate_signature(self, params: Dict[str, Any]) -> str:
-        """Generate HMAC SHA256 signature for Aster API authentication."""
-        # Use urlencode to properly format the query string
-        query_string = urlencode(params)
-
-        # Generate HMAC SHA256 signature
-        signature = hmac.new(
-            self.secret_key.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-        return signature
-
-    async def _get_listen_key(self) -> str:
-        """Get listen key for user data stream."""
-        params = {
-            'timestamp': int(time.time() * 1000)
-        }
-        signature = self._generate_signature(params)
-        params['signature'] = signature
-
+    async def _request_listen_key(self, method: str, path: str) -> Dict[str, Any]:
+        """Send a signed listen-key request (USER_STREAM endpoint)."""
+        query_string, signature = self.signer.sign({})
+        body = f"{query_string}&signature={signature}"
+        url = f"{self.base_url}{path}"
         headers = {
-            'X-MBX-APIKEY': self.api_key,
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'PythonApp/1.0'
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                'https://fapi.asterdex.com/fapi/v1/listenKey',
-                headers=headers,
-                data=params
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result.get('listenKey')
-                else:
-                    raise Exception(f"Failed to get listen key: {response.status}")
+            async with session.request(method, url, data=body, headers=headers) as response:
+                text = await response.text()
+                try:
+                    result = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    result = text
+                if response.status != 200:
+                    raise Exception(f"Failed to {method} {path}: {response.status} {text}")
+                return result
+
+    async def _get_listen_key(self) -> str:
+        """Get listen key for user data stream."""
+        result = await self._request_listen_key('POST', '/fapi/v3/listenKey')
+        return result.get('listenKey')
 
     async def _keepalive_listen_key(self) -> bool:
         """Keep alive the listen key to prevent timeout."""
@@ -81,48 +174,28 @@ class AsterWebSocketManager:
             if not self.listen_key:
                 return False
 
-            params = {
-                'timestamp': int(time.time() * 1000)
-            }
-            signature = self._generate_signature(params)
-            params['signature'] = signature
-
-            headers = {
-                'X-MBX-APIKEY': self.api_key,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.put(
-                    f"{self.base_url}/fapi/v1/listenKey",
-                    headers=headers,
-                    data=params
-                ) as response:
-                    if response.status == 200:
-                        if self.logger:
-                            self.logger.log("Listen key keepalive successful", "DEBUG")
-                        return True
-                    else:
-                        if self.logger:
-                            self.logger.log(f"Failed to keepalive listen key: {response.status}", "WARNING")
-                        return False
+            await self._request_listen_key('PUT', '/fapi/v3/listenKey')
+            self._last_keepalive_time = time.time()
+            if self.logger:
+                self.logger.log("Listen key keepalive successful", "DEBUG")
+            return True
         except Exception as e:
             if self.logger:
                 self.logger.log(f"Error keeping alive listen key: {e}", "ERROR")
             return False
 
     async def _check_connection_health(self) -> bool:
-        """Check if the WebSocket connection is healthy based on ping timing."""
+        """Check if the WebSocket connection is healthy based on message timing."""
         if not self._last_ping_time:
-            return True  # No pings received yet, assume healthy
+            return True  # No messages received yet, assume healthy
 
-        # Check if we haven't received a ping in the last 10 minutes
-        # (server sends pings every 5 minutes, so 10 minutes indicates a problem)
+        # If we haven't received anything in 10 minutes the connection is stale
+        # (the server pushes pings periodically, so a silent socket is unhealthy).
         time_since_last_ping = time.time() - self._last_ping_time
         if time_since_last_ping > 10 * 60:  # 10 minutes
             if self.logger:
                 self.logger.log(
-                    f"No ping received for {time_since_last_ping/60:.1f} minutes, "
+                    f"No message received for {time_since_last_ping/60:.1f} minutes, "
                     "connection may be unhealthy", "WARNING"
                 )
             return False
@@ -130,7 +203,7 @@ class AsterWebSocketManager:
         return True
 
     async def _start_keepalive_task(self):
-        """Start the keepalive task to extend listen key validity and monitor connection health."""
+        """Keep the listen key alive and monitor connection health."""
         while self.running:
             try:
                 # Check connection health every 5 minutes
@@ -153,8 +226,8 @@ class AsterWebSocketManager:
                         await asyncio.sleep(30)
                     continue
 
-                # Check if we need to keepalive the listen key (every 50 minutes)
-                if self.listen_key and time.time() % (50 * 60) < 5 * 60:  # Within 5 minutes of 50-minute mark
+                # Keepalive the listen key every 30 minutes (server closes it after 60)
+                if not self._last_keepalive_time or time.time() - self._last_keepalive_time >= 30 * 60:
                     success = await self._keepalive_listen_key()
                     if not success:
                         if self.logger:
@@ -186,6 +259,8 @@ class AsterWebSocketManager:
             ws_url = f"{self.ws_url}/ws/{self.listen_key}"
             self.websocket = await websockets.connect(ws_url)
             self.running = True
+            self._last_ping_time = None
+            self._last_keepalive_time = None
 
             if self.logger:
                 self.logger.log("Connected to Aster WebSocket with listen key", "INFO")
@@ -208,12 +283,8 @@ class AsterWebSocketManager:
                 if not self.running:
                     break
 
-                # Check if this is a ping frame (websockets library handles pong automatically)
-                if isinstance(message, bytes) and message == b'\x89\x00':  # Ping frame
-                    self._last_ping_time = time.time()
-                    if self.logger:
-                        self.logger.log("Received ping frame, sending pong", "DEBUG")
-                    continue
+                # Track any received message as a sign of life
+                self._last_ping_time = time.time()
 
                 try:
                     data = json.loads(message)
@@ -327,15 +398,12 @@ class AsterClient(BaseExchangeClient):
         """Initialize Aster client."""
         super().__init__(config)
 
-        # Aster credentials from environment
-        self.api_key = os.getenv('ASTER_API_KEY')
-        self.secret_key = os.getenv('ASTER_SECRET_KEY')
-        self.base_url = 'https://fapi.asterdex.com'
-
-        if not self.api_key or not self.secret_key:
-            raise ValueError(
-                "ASTER_API_KEY and ASTER_SECRET_KEY must be set in environment variables"
-            )
+        # Aster V3 credentials from environment
+        self.signer = AsterSigner(
+            os.getenv('ASTER_ACCOUNT_ADDRESS', ''),
+            os.getenv('ASTER_PRIVATE_KEY', '')
+        )
+        self.base_url = ASTER_BASE_URL
 
         # Initialize logger early
         self.logger = TradingLogger(exchange="aster", ticker=self.config.ticker, log_to_console=False)
@@ -343,86 +411,77 @@ class AsterClient(BaseExchangeClient):
 
     def _validate_config(self) -> None:
         """Validate Aster configuration."""
-        required_env_vars = ['ASTER_API_KEY', 'ASTER_SECRET_KEY']
+        required_env_vars = ['ASTER_ACCOUNT_ADDRESS', 'ASTER_PRIVATE_KEY']
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
         if missing_vars:
             raise ValueError(f"Missing required environment variables: {missing_vars}")
 
-    def _generate_signature(self, params: Dict[str, Any]) -> str:
-        """Generate HMAC SHA256 signature for Aster API authentication."""
-        # Use urlencode to properly format the query string
-        query_string = urlencode(params)
+    async def _public_request(
+        self, method: str, endpoint: str, params: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """Make an unsigned request to a public (market data) Aster V3 endpoint."""
+        url = f"{self.base_url}{endpoint}"
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'PythonApp/1.0'
+        }
 
-        # Generate HMAC SHA256 signature
-        signature = hmac.new(
-            self.secret_key.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-        return signature
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method.upper(), url, params=params, headers=headers) as response:
+                text = await response.text()
+                try:
+                    result = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    result = text
+                if response.status != 200:
+                    raise Exception(f"API request failed: {result}")
+                return result
 
     async def _make_request(
         self, method: str, endpoint: str, params: Dict[str, Any] = None, data: Dict[str, Any] = None
     ) -> Dict[str, Any]:
-        """Make authenticated request to Aster API."""
-        if params is None:
-            params = {}
-        if data is None:
-            data = {}
+        """Make an ECDSA-signed request to an authenticated Aster V3 endpoint.
 
-        # Add timestamp and recvWindow
-        timestamp = int(time.time() * 1000)
-        params['timestamp'] = timestamp
-        params['recvWindow'] = 5000
+        GET parameters travel in the query string; POST/PUT/DELETE parameters
+        travel in the urlencoded request body. In both cases ``signature`` is
+        appended last and is never part of the signed payload.
+        """
+        method = method.upper()
+        payload = dict(params) if params else {}
+        if data:
+            payload.update(data)
+
+        query_string, signature = self.signer.sign(payload)
 
         url = f"{self.base_url}{endpoint}"
         headers = {
-            'X-MBX-APIKEY': self.api_key,
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'PythonApp/1.0'
         }
 
         async with aiohttp.ClientSession() as session:
-            if method.upper() == 'GET':
-                # For GET requests, signature is based on query parameters only
-                signature = self._generate_signature(params)
-                params['signature'] = signature
+            if method == 'GET':
+                url = f"{url}?{query_string}&signature={signature}"
+                request_params = {'headers': headers}
+            else:
+                request_params = {'data': f"{query_string}&signature={signature}", 'headers': headers}
 
-                async with session.get(url, params=params, headers=headers) as response:
-                    result = await response.json()
-                    if response.status != 200:
-                        raise Exception(f"API request failed: {result}")
-                    return result
-            elif method.upper() == 'POST':
-                # For POST requests, signature must include both query string and request body
-                # According to Aster API docs: totalParams = queryString + requestBody
-                all_params = {**params, **data}
-                signature = self._generate_signature(all_params)
-                all_params['signature'] = signature
-
-                async with session.post(url, data=all_params, headers=headers) as response:
-                    result = await response.json()
-                    if response.status != 200:
-                        raise Exception(f"API request failed: {result}")
-                    return result
-            elif method.upper() == 'DELETE':
-                # For DELETE requests, signature is based on query parameters only
-                signature = self._generate_signature(params)
-                params['signature'] = signature
-
-                async with session.delete(url, params=params, headers=headers) as response:
-                    result = await response.json()
-                    if response.status != 200:
-                        raise Exception(f"API request failed: {result}")
-                    return result
+            async with session.request(method, url, **request_params) as response:
+                text = await response.text()
+                try:
+                    result = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    result = text
+                if response.status != 200:
+                    raise Exception(f"API request failed: {result}")
+                return result
 
     async def connect(self) -> None:
         """Connect to Aster WebSocket."""
         # Initialize WebSocket manager
         self.ws_manager = AsterWebSocketManager(
             config=self.config,
-            api_key=self.api_key,
-            secret_key=self.secret_key,
+            signer=self.signer,
             order_update_callback=self._handle_websocket_order_update
         )
 
@@ -465,7 +524,7 @@ class AsterClient(BaseExchangeClient):
     @query_retry(default_return=(0, 0))
     async def fetch_bbo_prices(self, contract_id: str) -> Tuple[Decimal, Decimal]:
         """Fetch best bid and ask prices from Aster."""
-        result = await self._make_request('GET', '/fapi/v1/ticker/bookTicker', {'symbol': contract_id})
+        result = await self._public_request('GET', '/fapi/v3/ticker/bookTicker', {'symbol': contract_id})
 
         best_bid = Decimal(result.get('bidPrice', 0))
         best_ask = Decimal(result.get('askPrice', 0))
@@ -528,7 +587,7 @@ class AsterClient(BaseExchangeClient):
                 'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
             }
 
-            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+            result = await self._make_request('POST', '/fapi/v3/order', data=order_data)
             order_status = result.get('status', '')
             order_id = result.get('orderId', '')
 
@@ -605,7 +664,7 @@ class AsterClient(BaseExchangeClient):
                 'timeInForce': 'GTX'  # GTX is Good Till Crossing (Post Only)
             }
 
-            result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+            result = await self._make_request('POST', '/fapi/v3/order', data=order_data)
             order_status = result.get('status', '')
             order_id = result.get('orderId', '')
 
@@ -641,7 +700,7 @@ class AsterClient(BaseExchangeClient):
             'quantity': str(quantity)
         }
 
-        result = await self._make_request('POST', '/fapi/v1/order', data=order_data)
+        result = await self._make_request('POST', '/fapi/v3/order', data=order_data)
         order_status = result.get('status', '')
         order_id = result.get('orderId', '')
 
@@ -669,7 +728,7 @@ class AsterClient(BaseExchangeClient):
     async def cancel_order(self, order_id: str) -> OrderResult:
         """Cancel an order with Aster."""
         try:
-            result = await self._make_request('DELETE', '/fapi/v1/order', {
+            result = await self._make_request('DELETE', '/fapi/v3/order', {
                 'symbol': self.config.contract_id,
                 'orderId': order_id
             })
@@ -685,7 +744,7 @@ class AsterClient(BaseExchangeClient):
     @query_retry()
     async def get_order_info(self, order_id: str) -> Optional[OrderInfo]:
         """Get order information from Aster."""
-        result = await self._make_request('GET', '/fapi/v1/order', {
+        result = await self._make_request('GET', '/fapi/v3/order', {
             'symbol': self.config.contract_id,
             'orderId': order_id
         })
@@ -711,7 +770,7 @@ class AsterClient(BaseExchangeClient):
     @query_retry(default_return=[])
     async def get_active_orders(self, contract_id: str) -> List[OrderInfo]:
         """Get active orders for a contract from Aster."""
-        result = await self._make_request('GET', '/fapi/v1/openOrders', {'symbol': contract_id})
+        result = await self._make_request('GET', '/fapi/v3/openOrders', {'symbol': contract_id})
 
         orders = []
         for order in result:
@@ -730,7 +789,7 @@ class AsterClient(BaseExchangeClient):
     @query_retry(reraise=True)
     async def get_account_positions(self) -> Decimal:
         """Get account positions from Aster."""
-        result = await self._make_request('GET', '/fapi/v2/positionRisk', {'symbol': self.config.contract_id})
+        result = await self._make_request('GET', '/fapi/v3/positionRisk', {'symbol': self.config.contract_id})
 
         for position in result:
             if position.get('symbol') == self.config.contract_id:
@@ -747,7 +806,7 @@ class AsterClient(BaseExchangeClient):
             raise ValueError("Ticker is empty")
 
         try:
-            result = await self._make_request('GET', '/fapi/v1/exchangeInfo')
+            result = await self._public_request('GET', '/fapi/v3/exchangeInfo')
 
             for symbol_info in result['symbols']:
                 if (symbol_info.get('status') == 'TRADING' and

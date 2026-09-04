@@ -365,8 +365,8 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 
 #### Aster 配置
 
-- `ASTER_API_KEY`: 您的 Aster API Key
-- `ASTER_SECRET_KEY`: 您的 Aster API Secret
+- `ASTER_ACCOUNT_ADDRESS`: 您 Aster 账户的主钱包（登录）地址
+- `ASTER_PRIVATE_KEY`: 该账户下注册的 API Wallet（Pro API）私钥，请求签名地址由其派生
 
 #### Lighter 配置
 
