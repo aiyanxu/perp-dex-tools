@@ -71,6 +71,15 @@ STANDX_WALLET_ADDRESS=your_wallet_address_here
 STANDX_PRIVATE_KEY=your_wallet_private_key_here
 STANDX_CHAIN=bsc  # or solana
 
+# Arcus Configuration
+# app.arcus.xyz -> Settings -> API Keys: create a key and copy the private
+# signing key (shown once). ARCUS_WALLET_ADDRESS is the master wallet address
+# the API key is registered against.
+ARCUS_WALLET_ADDRESS=your_wallet_address_here
+ARCUS_API_PRIVATE_KEY=your_ed25519_api_signing_key_here
+ARCUS_ENVIRONMENT=mainnet  # or testnet
+ARCUS_ACCOUNT_INDEX=0
+
 # Notification (optional)
 # guide: https://www.feishu.cn/hc/zh-CN/articles/185289387886-%E6%B6%88%E6%81%AF%E5%8A%A9%E6%89%8B-%E6%9C%BA%E5%99%A8%E4%BA%BA
 LARK_TOKEN=

@@ -321,11 +321,14 @@ python hedge_mode.py --exchange grvt --ticker BTC --size 0.05 --iter 20
 
 # 运行 BTC 对冲模式（edgeX）
 python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
+
+# 运行 BTC 对冲模式（Arcus）
+python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-position 0.05
 ```
 
 ### 对冲模式参数
 
-- `--exchange`: 主要交易所（支持 'backpack', 'extended', 'apex', 'grvt', 'edgex'）
+- `--exchange`: 主要交易所（支持 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus'）
 - `--ticker`: 交易对符号（如 BTC, ETH）
 - `--size`: 每笔订单数量
 - `--iter`: 交易循环次数
@@ -399,6 +402,13 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 - `NADO_PRIVATE_KEY`: 您的钱包私钥
 - `NADO_MODE`: 网络模式（MAINNET 或 DEVNET，默认：MAINNET）
 
+#### Arcus 配置
+
+- `ARCUS_WALLET_ADDRESS`: 您的主钱包地址（API Key 注册所绑定的地址）
+- `ARCUS_API_PRIVATE_KEY`: Ed25519 API 签名私钥（32 字节 hex，在网页端创建 API Key 时仅显示一次）
+- `ARCUS_ENVIRONMENT`: 网络环境（mainnet 或 testnet，默认：mainnet）
+- `ARCUS_ACCOUNT_INDEX`: 子账户索引（默认：0）
+
 **获取 LIGHTER_ACCOUNT_INDEX 的方法**：
 
 1. 在下面的网址最后加上你的钱包地址：
@@ -413,7 +423,7 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 
 ### 命令行参数
 
-- `--exchange`: 使用的交易所：'edgex'、'backpack'、'paradex'、'aster'、'lighter'、'grvt'、'extended' 或 'nado'（默认：edgex）
+- `--exchange`: 使用的交易所：'edgex'、'backpack'、'paradex'、'aster'、'lighter'、'grvt'、'extended'、'nado'、'standx' 或 'arcus'（默认：edgex）
 - `--ticker`: 标的资产符号（例如：ETH、BTC、SOL）。合约 ID 自动解析。
 - `--quantity`: 订单数量（默认：0.1）
 - `--take-profit`: 止盈百分比（例如 0.02 表示 0.02%）

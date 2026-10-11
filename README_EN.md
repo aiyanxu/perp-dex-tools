@@ -295,11 +295,14 @@ python hedge_mode.py --exchange grvt --ticker BTC --size 0.05 --iter 20
 
 # Run BTC hedge mode with edgeX
 python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
+
+# Run BTC hedge mode with Arcus
+python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-position 0.05
 ```
 
 ### Hedge Mode Parameters
 
-- `--exchange`: Primary exchange (supports 'backpack', 'extended', 'apex', 'grvt', 'edgex')
+- `--exchange`: Primary exchange (supports 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus')
 - `--ticker`: Trading pair symbol (e.g., BTC, ETH)
 - `--size`: Order quantity per trade
 - `--iter`: Number of trading cycles
@@ -368,6 +371,13 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 - `APEX_API_KEY_SECRET`: Your Apex API key secret
 - `APEX_OMNI_KEY_SEED`: Your Apex Omni key seed
 
+#### Arcus Configuration
+
+- `ARCUS_WALLET_ADDRESS`: Your master wallet address (the address the API key is registered against)
+- `ARCUS_API_PRIVATE_KEY`: Ed25519 API signing private key (32-byte hex, shown once when creating the API key in the web app)
+- `ARCUS_ENVIRONMENT`: Environment (mainnet or testnet, default: mainnet)
+- `ARCUS_ACCOUNT_INDEX`: Subaccount index (default: 0)
+
 **How to get LIGHTER_ACCOUNT_INDEX**:
 
 1. Add your wallet address to the end of the following URL:
@@ -382,7 +392,7 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 
 ### Command Line Arguments
 
-- `--exchange`: Exchange to use: 'edgex', 'backpack', 'paradex', 'aster', 'lighter', 'grvt', or 'extended' (default: edgex)
+- `--exchange`: Exchange to use: 'edgex', 'backpack', 'paradex', 'aster', 'lighter', 'grvt', 'extended', 'nado', 'standx', or 'arcus' (default: edgex)
 - `--ticker`: Base asset symbol (e.g., ETH, BTC, SOL). Contract ID is auto-resolved.
 - `--quantity`: Order quantity (default: 0.1)
 - `--take-profit`: Take profit percent (e.g., 0.02 means 0.02%)
