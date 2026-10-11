@@ -39,13 +39,17 @@ class HedgeBot:
     # StandX offset: 9 basis points (bps) from BBO
     STANDX_OFFSET_BPS = Decimal('0.0009')  # 9 bps = 0.09%
 
-    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, 
-                 iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5,
+                 iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0'),
+                 direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
         self.iterations = iterations
         self.sleep_time = sleep_time
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         if max_position == Decimal('0'):
             self.max_position = order_quantity
         else:
@@ -729,11 +733,15 @@ class HedgeBot:
             self.logger.info(f"🔄 Trading loop iteration {iterations}")
             self.logger.info("-----------------------------------------------")
 
-            # BUY phase: Build long position on StandX, hedge short on Lighter
-            while self.standx_position < self.max_position and not self.stop_flag:
+            # OPEN phase: build position in self.direction on StandX, hedge opposite on Lighter
+            open_side = self.direction
+            while ((self.standx_position < self.max_position) if open_side == 'buy'
+                   else (self.standx_position > -1 * self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.standx_position = await self.get_standx_position()
-                self.logger.info(f"Buying up to {self.max_position} | StandX pos: {self.standx_position} | Lighter pos: {self.lighter_position}")
+                self.logger.info(f"{open_side.capitalize()}ing up to "
+                                 f"{'-' if open_side == 'sell' else ''}{self.max_position} | "
+                                 f"StandX pos: {self.standx_position} | Lighter pos: {self.lighter_position}")
 
                 if abs(self.standx_position + self.lighter_position) > self.order_quantity * 2:
                     self.logger.error(f"❌ Position diff too large: {self.standx_position + self.lighter_position}")
@@ -742,72 +750,87 @@ class HedgeBot:
                 self.order_execution_complete = False
 
                 try:
-                    filled_size, filled_price = await self.place_standx_post_only_order('buy', self.order_quantity)
+                    filled_size, filled_price = await self.place_standx_post_only_order(open_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[StandX] [buy] [CANCELLED]")
+                        self.logger.info(f"[StandX] [{open_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing StandX post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[StandX] [buy] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[StandX] [{open_side}] [FILLED]: {filled_size} @ {filled_price}")
                 self.log_trade_to_csv(
                     exchange='StandX',
-                    side='buy',
+                    side=open_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.standx_position += filled_size
-
-                # Hedge on Lighter
-                await self.place_lighter_market_order('sell', abs(filled_size))
+                if open_side == 'buy':
+                    self.standx_position += filled_size
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('sell', abs(filled_size))
+                else:
+                    self.standx_position -= abs(filled_size)
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('buy', abs(filled_size))
 
             if self.sleep_time > 0:
                 self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                 await asyncio.sleep(self.sleep_time)
 
-            # SELL phase: Build short position on StandX, hedge long on Lighter
+            # CLOSE phase: unwind the opened position on StandX, hedge opposite on Lighter
+            close_side = 'sell' if open_side == 'buy' else 'buy'
             exit_after_next_trade = False
-            while self.standx_position > -1 * self.max_position and not self.stop_flag:
+            while ((self.standx_position > -1 * self.max_position) if close_side == 'sell'
+                   else (self.standx_position < self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.standx_position = await self.get_standx_position()
-                self.logger.info(f"Selling up to -{self.max_position} | StandX pos: {self.standx_position} | Lighter pos: {self.lighter_position}")
+                self.logger.info(f"{close_side.capitalize()}ing back from "
+                                 f"{'-' if close_side == 'sell' else ''}{self.max_position} | "
+                                 f"StandX pos: {self.standx_position} | Lighter pos: {self.lighter_position}")
 
                 if abs(self.standx_position + self.lighter_position) > self.order_quantity * 2:
                     self.logger.error(f"❌ Position diff too large: {self.standx_position + self.lighter_position}")
                     sys.exit(1)
 
                 if iterations == self.iterations:
-                    if self.standx_position > 0 and self.standx_position <= self.order_quantity:
+                    # Final iteration: unwind whatever remains so we end flat
+                    if close_side == 'sell' and 0 < self.standx_position <= self.order_quantity:
+                        exit_after_next_trade = True
+                    elif close_side == 'buy' and -self.order_quantity <= self.standx_position < 0:
                         exit_after_next_trade = True
 
                 try:
                     if exit_after_next_trade:
-                        filled_size, filled_price = await self.place_standx_post_only_order('sell', abs(self.standx_position))
+                        filled_size, filled_price = await self.place_standx_post_only_order(close_side, abs(self.standx_position))
                     else:
-                        filled_size, filled_price = await self.place_standx_post_only_order('sell', self.order_quantity)
+                        filled_size, filled_price = await self.place_standx_post_only_order(close_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[StandX] [sell] [CANCELLED]")
+                        self.logger.info(f"[StandX] [{close_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing StandX post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[StandX] [sell] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[StandX] [{close_side}] [FILLED]: {filled_size} @ {filled_price}")
                 self.log_trade_to_csv(
                     exchange='StandX',
-                    side='sell',
+                    side=close_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.standx_position -= abs(filled_size)
-
-                # Hedge on Lighter
-                await self.place_lighter_market_order('buy', abs(filled_size))
+                if close_side == 'sell':
+                    self.standx_position -= abs(filled_size)
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('buy', abs(filled_size))
+                else:
+                    self.standx_position += filled_size
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('sell', abs(filled_size))
 
                 if exit_after_next_trade:
                     self.logger.info("Position back to zero. Done! Exiting...")
@@ -834,6 +857,8 @@ if __name__ == "__main__":
     parser.add_argument('--iterations', type=int, default=20, help='Number of trading iterations')
     parser.add_argument('--sleep-time', type=int, default=0, help='Sleep time between iterations')
     parser.add_argument('--max-position', type=str, default='0', help='Maximum position size')
+    parser.add_argument('--direction', type=str, default='buy', choices=['buy', 'sell'],
+                        help='Opening direction on StandX: buy (long first) or sell (short first) (default: buy)')
 
     args = parser.parse_args()
 
@@ -843,7 +868,8 @@ if __name__ == "__main__":
         fill_timeout=args.fill_timeout,
         iterations=args.iterations,
         sleep_time=args.sleep_time,
-        max_position=Decimal(args.max_position)
+        max_position=Decimal(args.max_position),
+        direction=args.direction
     )
 
     asyncio.run(bot.run())

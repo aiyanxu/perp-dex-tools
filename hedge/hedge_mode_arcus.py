@@ -45,12 +45,16 @@ class HedgeBot:
     DMS_DEADLINE_SECONDS = 60
 
     def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5,
-                 iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+                 iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0'),
+                 direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
         self.iterations = iterations
         self.sleep_time = sleep_time
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         if max_position == Decimal('0'):
             self.max_position = order_quantity
         else:
@@ -757,11 +761,15 @@ class HedgeBot:
             self.logger.info(f"🔄 Trading loop iteration {iterations}")
             self.logger.info("-----------------------------------------------")
 
-            # BUY phase: Build long position on Arcus, hedge short on Lighter
-            while self.arcus_position < self.max_position and not self.stop_flag:
+            # OPEN phase: build position in self.direction on Arcus, hedge opposite on Lighter
+            open_side = self.direction  # 'buy' -> long on Arcus, 'sell' -> short on Arcus
+            while ((self.arcus_position < self.max_position) if open_side == 'buy'
+                   else (self.arcus_position > -1 * self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.arcus_position = await self.get_arcus_position()
-                self.logger.info(f"Buying up to {self.max_position} | Arcus pos: {self.arcus_position} | Lighter pos: {self.lighter_position}")
+                self.logger.info(f"{open_side.capitalize()}ing up to "
+                                 f"{'-' if open_side == 'sell' else ''}{self.max_position} | "
+                                 f"Arcus pos: {self.arcus_position} | Lighter pos: {self.lighter_position}")
 
                 if abs(self.arcus_position + self.lighter_position) > self.order_quantity * 2:
                     self.logger.error(f"❌ Position diff too large: {self.arcus_position + self.lighter_position}")
@@ -770,72 +778,87 @@ class HedgeBot:
                 self.order_execution_complete = False
 
                 try:
-                    filled_size, filled_price = await self.place_arcus_post_only_order('buy', self.order_quantity)
+                    filled_size, filled_price = await self.place_arcus_post_only_order(open_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[Arcus] [buy] [CANCELLED]")
+                        self.logger.info(f"[Arcus] [{open_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing Arcus post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[Arcus] [buy] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[Arcus] [{open_side}] [FILLED]: {filled_size} @ {filled_price}")
                 self.log_trade_to_csv(
                     exchange='Arcus',
-                    side='buy',
+                    side=open_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.arcus_position += filled_size
-
-                # Hedge on Lighter
-                await self.place_lighter_market_order('sell', abs(filled_size))
+                if open_side == 'buy':
+                    self.arcus_position += filled_size
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('sell', abs(filled_size))
+                else:
+                    self.arcus_position -= abs(filled_size)
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('buy', abs(filled_size))
 
             if self.sleep_time > 0:
                 self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                 await asyncio.sleep(self.sleep_time)
 
-            # SELL phase: Build short position on Arcus, hedge long on Lighter
+            # CLOSE phase: unwind the opened position on Arcus, hedge opposite on Lighter
+            close_side = 'sell' if open_side == 'buy' else 'buy'
             exit_after_next_trade = False
-            while self.arcus_position > -1 * self.max_position and not self.stop_flag:
+            while ((self.arcus_position > -1 * self.max_position) if close_side == 'sell'
+                   else (self.arcus_position < self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.arcus_position = await self.get_arcus_position()
-                self.logger.info(f"Selling up to -{self.max_position} | Arcus pos: {self.arcus_position} | Lighter pos: {self.lighter_position}")
+                self.logger.info(f"{close_side.capitalize()}ing back from "
+                                 f"{'-' if close_side == 'sell' else ''}{self.max_position} | "
+                                 f"Arcus pos: {self.arcus_position} | Lighter pos: {self.lighter_position}")
 
                 if abs(self.arcus_position + self.lighter_position) > self.order_quantity * 2:
                     self.logger.error(f"❌ Position diff too large: {self.arcus_position + self.lighter_position}")
                     sys.exit(1)
 
                 if iterations == self.iterations:
-                    if self.arcus_position > 0 and self.arcus_position <= self.order_quantity:
+                    # Final iteration: unwind whatever remains so we end flat
+                    if close_side == 'sell' and 0 < self.arcus_position <= self.order_quantity:
+                        exit_after_next_trade = True
+                    elif close_side == 'buy' and -self.order_quantity <= self.arcus_position < 0:
                         exit_after_next_trade = True
 
                 try:
                     if exit_after_next_trade:
-                        filled_size, filled_price = await self.place_arcus_post_only_order('sell', abs(self.arcus_position))
+                        filled_size, filled_price = await self.place_arcus_post_only_order(close_side, abs(self.arcus_position))
                     else:
-                        filled_size, filled_price = await self.place_arcus_post_only_order('sell', self.order_quantity)
+                        filled_size, filled_price = await self.place_arcus_post_only_order(close_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[Arcus] [sell] [CANCELLED]")
+                        self.logger.info(f"[Arcus] [{close_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing Arcus post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[Arcus] [sell] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[Arcus] [{close_side}] [FILLED]: {filled_size} @ {filled_price}")
                 self.log_trade_to_csv(
                     exchange='Arcus',
-                    side='sell',
+                    side=close_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.arcus_position -= abs(filled_size)
-
-                # Hedge on Lighter
-                await self.place_lighter_market_order('buy', abs(filled_size))
+                if close_side == 'sell':
+                    self.arcus_position -= abs(filled_size)
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('buy', abs(filled_size))
+                else:
+                    self.arcus_position += filled_size
+                    # Hedge on Lighter
+                    await self.place_lighter_market_order('sell', abs(filled_size))
 
                 if exit_after_next_trade:
                     self.logger.info("Position back to zero. Done! Exiting...")
@@ -870,6 +893,8 @@ if __name__ == "__main__":
     parser.add_argument('--iterations', type=int, default=20, help='Number of trading iterations')
     parser.add_argument('--sleep-time', type=int, default=0, help='Sleep time between iterations')
     parser.add_argument('--max-position', type=str, default='0', help='Maximum position size')
+    parser.add_argument('--direction', type=str, default='buy', choices=['buy', 'sell'],
+                        help='Opening direction on Arcus: buy (long first) or sell (short first) (default: buy)')
 
     args = parser.parse_args()
 
@@ -879,7 +904,8 @@ if __name__ == "__main__":
         fill_timeout=args.fill_timeout,
         iterations=args.iterations,
         sleep_time=args.sleep_time,
-        max_position=Decimal(args.max_position)
+        max_position=Decimal(args.max_position),
+        direction=args.direction
     )
 
     asyncio.run(bot.run())

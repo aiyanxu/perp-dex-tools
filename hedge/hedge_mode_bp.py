@@ -32,7 +32,7 @@ class Config:
 class HedgeBot:
     """Trading bot that places post-only orders on Backpack and hedges with market orders on Lighter."""
 
-    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0'), direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
@@ -40,6 +40,9 @@ class HedgeBot:
         self.iterations = iterations
         self.sleep_time = sleep_time
         self.current_order = {}
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         if max_position == Decimal('0'):
             self.max_position = order_quantity
         else:
@@ -1104,11 +1107,15 @@ class HedgeBot:
             self.logger.info(f"🔄 Trading loop iteration {iterations}")
             self.logger.info("-----------------------------------------------")
 
-            while self.backpack_position < self.max_position and not self.stop_flag:
+            # OPEN phase: build position in self.direction on Backpack, hedge opposite on Lighter
+            open_side = self.direction
+            while ((self.backpack_position < self.max_position) if open_side == 'buy'
+                   else (self.backpack_position > -1 * self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.backpack_position = await self.get_backpack_position()
                 self.logger.info(
-                    f"Buying up to {self.max_position} | Backpack position: {self.backpack_position} |"
+                    f"{open_side.capitalize()}ing up to "
+                    f"{'-' if open_side == 'sell' else ''}{self.max_position} | Backpack position: {self.backpack_position} |"
                     f" Lighter position: {self.lighter_position}")
                 if abs(self.backpack_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.backpack_position + self.lighter_position}")
@@ -1117,9 +1124,7 @@ class HedgeBot:
                 self.order_execution_complete = False
                 self.waiting_for_lighter_fill = False
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'buy'
-                    await self.place_backpack_post_only_order(side, self.order_quantity)
+                    await self.place_backpack_post_only_order(open_side, self.order_quantity)
                 except Exception as e:
                     self.logger.error(f"⚠️ Error in trading loop: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
@@ -1148,30 +1153,35 @@ class HedgeBot:
                 self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                 await asyncio.sleep(self.sleep_time)
 
+            # CLOSE phase: unwind the opened position on Backpack, hedge opposite on Lighter
+            close_side = 'sell' if open_side == 'buy' else 'buy'
             exit_after_next_trade = False
-            while self.backpack_position > -1*self.max_position and not self.stop_flag:
+            while ((self.backpack_position > -1*self.max_position) if close_side == 'sell'
+                   else (self.backpack_position < self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.backpack_position = await self.get_backpack_position()
                 self.logger.info(
-                    f"Selling up to -{self.max_position} | Backpack position: {self.backpack_position} |"
+                    f"{close_side.capitalize()}ing back from "
+                    f"{'-' if close_side == 'sell' else ''}{self.max_position} | Backpack position: {self.backpack_position} |"
                     f" Lighter position: {self.lighter_position}")
                 if abs(self.backpack_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.backpack_position + self.lighter_position}")
                     sys.exit(1)
 
                 if iterations == self.iterations:
-                    if self.backpack_position > 0 and self.backpack_position <= self.order_quantity:
+                    # Final iteration: unwind whatever remains so we end flat
+                    if close_side == 'sell' and 0 < self.backpack_position <= self.order_quantity:
+                        exit_after_next_trade = True
+                    elif close_side == 'buy' and -self.order_quantity <= self.backpack_position < 0:
                         exit_after_next_trade = True
 
                 self.order_execution_complete = False
                 self.waiting_for_lighter_fill = False
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'sell'
                     if exit_after_next_trade:
-                        await self.place_backpack_post_only_order(side, abs(self.backpack_position))
+                        await self.place_backpack_post_only_order(close_side, abs(self.backpack_position))
                     else:
-                        await self.place_backpack_post_only_order(side, self.order_quantity)
+                        await self.place_backpack_post_only_order(close_side, self.order_quantity)
                 except Exception as e:
                     self.logger.error(f"⚠️ Error in trading loop: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")

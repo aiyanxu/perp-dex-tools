@@ -66,6 +66,8 @@ Examples:
                         help=".env file path (default: .env)")
     parser.add_argument('--max-position', type=Decimal, default=Decimal('0'),
                         help='Maximum position to hold (default: 0)')
+    parser.add_argument('--direction', type=str, default='buy', choices=['buy', 'sell'],
+                        help='Opening direction on the primary exchange: buy (long first) or sell (short first) (default: buy)')
     parser.add_argument('--v2', action='store_true',
                         help='Use v2 implementation (currently only supported for grvt exchange)')
     
@@ -164,7 +166,8 @@ async def main():
                 fill_timeout=args.fill_timeout,
                 iterations=args.iter,
                 sleep_time=args.sleep,
-                max_position=args.max_position
+                max_position=args.max_position,
+                direction=args.direction
             )
         else:
             bot = HedgeBotClass(
@@ -172,7 +175,8 @@ async def main():
                 order_quantity=Decimal(args.size),
                 fill_timeout=args.fill_timeout,
                 iterations=args.iter,
-                sleep_time=args.sleep
+                sleep_time=args.sleep,
+                direction=args.direction
             )
         
         # Run the bot

@@ -335,6 +335,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `--fill-timeout`: maker 订单填充超时时间（秒，默认 5）
 - `--sleep`: 每一笔交易之后的暂停时间，增加持仓时间（秒，默认 0）
 - `--max-position`: 当设置了这个参数后，对冲模式会在对冲的同时逐渐建仓到设置的最大仓位，单位是币本位，比如在跑 btc 时设置 0.1，就是指逐渐建仓到 0.1btc，并逐渐建仓。达到这个最大仓位后，会逐渐建仓，以此循环。
+- `--direction`: 开仓方向：'buy'（先开多）或 'sell'（先开空），默认 buy。设置 sell 后开仓阶段在主交易所建立空头仓位、在 Lighter 买入对冲，回归阶段买回平仓。
 
 ## 配置
 

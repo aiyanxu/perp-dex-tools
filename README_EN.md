@@ -309,6 +309,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `--fill-timeout`: Maker order fill timeout in seconds (default: 5)
 - `--sleep`: Sleep time in seconds after each step (default: 0)
 - `--max-position`: When this parameter is set, the hedging mode will gradually build a position up to the specified maximum size while performing the hedge. The unit is in the base asset. For example, when running BTC, setting it to 0.1 means it will gradually build a position up to 0.1 BTC while hedging.
+- `--direction`: Opening direction: 'buy' (long first) or 'sell' (short first), default buy. With sell, the opening phase builds a short position on the primary exchange and buys on Lighter to hedge; the unwind phase buys back.
 
 ## Configuration
 

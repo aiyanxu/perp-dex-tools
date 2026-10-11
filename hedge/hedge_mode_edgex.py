@@ -27,7 +27,7 @@ class HedgeBot:
     """Trading bot that places post-only orders on edgeX and hedges with market orders on Lighter."""
 
     def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20,
-                 sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+                 sleep_time: int = 0, max_position: Decimal = Decimal('0'), direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
@@ -37,6 +37,9 @@ class HedgeBot:
         else:
             self.max_position = max_position
         self.sleep_time = sleep_time
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         self.edgex_position = Decimal('0')
         self.lighter_position = Decimal('0')
         self.edgex_client_order_id = ''
@@ -1220,12 +1223,16 @@ class HedgeBot:
                     break
 
                 self.logger.info(f"🔄 Trading loop iteration {iterations}/{self.iterations}")
-                while self.edgex_position < self.max_position and not self.stop_flag:
+                # OPEN phase: build position in self.direction on EdgeX, hedge opposite on Lighter
+                open_side = self.direction
+                while ((self.edgex_position < self.max_position) if open_side == 'buy'
+                       else (self.edgex_position > -self.max_position)) and not self.stop_flag:
                     self.lighter_position = self.get_lighter_position()
                     self.edgex_position = await self.get_edgex_position()
                     self.logger.info("-----------------------------------------------")
                     self.logger.info(
-                        f"Buying up to {self.max_position} BTC | EdgeX position: {self.edgex_position} |"
+                        f"{open_side.capitalize()}ing up to "
+                        f"{'-' if open_side == 'sell' else ''}{self.max_position} BTC | EdgeX position: {self.edgex_position} |"
                         f" Lighter position: {self.lighter_position}")
                     self.logger.info("-----------------------------------------------")
 
@@ -1236,9 +1243,7 @@ class HedgeBot:
                     self.order_execution_complete = False
                     self.waiting_for_lighter_fill = False
                     try:
-                        # Determine side based on some logic (for now, alternate)
-                        side = 'buy'
-                        await self.place_edgex_post_only_order(side, self.order_quantity)
+                        await self.place_edgex_post_only_order(open_side, self.order_quantity)
                     except ValueError as e:
                         if "DEADLINE_EXCEEDED" in str(e):
                             self.logger.warning("⏰ EdgeX order deadline exceeded, retrying in 5 seconds...")
@@ -1292,13 +1297,16 @@ class HedgeBot:
                     self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                     await asyncio.sleep(self.sleep_time)
 
-                # Close position
-                while self.edgex_position > -self.max_position and not self.stop_flag:
+                # CLOSE phase: unwind the opened position on EdgeX, hedge opposite on Lighter
+                close_side = 'sell' if open_side == 'buy' else 'buy'
+                while ((self.edgex_position > -self.max_position) if close_side == 'sell'
+                       else (self.edgex_position < self.max_position)) and not self.stop_flag:
                     self.lighter_position = self.get_lighter_position()
                     self.edgex_position = await self.get_edgex_position()
                     self.logger.info("-----------------------------------------------")
                     self.logger.info(
-                        f"Selling up to -{self.max_position} BTC | EdgeX position: {self.edgex_position} |"
+                        f"{close_side.capitalize()}ing back from "
+                        f"{'-' if close_side == 'sell' else ''}{self.max_position} BTC | EdgeX position: {self.edgex_position} |"
                         f" Lighter position: {self.lighter_position}")
                     self.logger.info("-----------------------------------------------")
 
@@ -1308,8 +1316,10 @@ class HedgeBot:
                         if self.edgex_position == 0:
                             self.logger.info("Position is already zero. Done!")
                             break
-                        if self.edgex_position < 0:
-                            await self.place_edgex_post_only_order('buy', abs(self.edgex_position))
+                        # Final iteration: unwind whatever remains so we end flat
+                        if (close_side == 'sell' and self.edgex_position < 0) or \
+                           (close_side == 'buy' and self.edgex_position > 0):
+                            await self.place_edgex_post_only_order(close_side, abs(self.edgex_position))
 
                             start_time_complete = time.time()
                             while not self.order_execution_complete and not self.stop_flag:
@@ -1333,9 +1343,7 @@ class HedgeBot:
                         sys.exit(1)
 
                     try:
-                        # Determine side based on some logic (for now, alternate)
-                        side = 'sell'
-                        await self.place_edgex_post_only_order(side, self.order_quantity)
+                        await self.place_edgex_post_only_order(close_side, self.order_quantity)
                     except ValueError as e:
                         if "DEADLINE_EXCEEDED" in str(e):
                             self.logger.warning("⏰ EdgeX order deadline exceeded, retrying in 5 seconds...")

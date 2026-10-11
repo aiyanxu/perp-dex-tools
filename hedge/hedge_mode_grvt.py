@@ -35,13 +35,16 @@ class Config:
 class HedgeBot:
     """Trading bot that places post-only orders on GRVT and hedges with market orders on Lighter."""
 
-    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0'), direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
         self.lighter_order_filled = False
         self.iterations = iterations
         self.sleep_time = sleep_time
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         self.grvt_position = Decimal('0')
         self.lighter_position = Decimal('0')
         self.current_order = {}
@@ -1001,10 +1004,15 @@ class HedgeBot:
             self.logger.info(f"🔄 Trading loop iteration {iterations}")
             self.logger.info("-----------------------------------------------")
 
-            while self.grvt_position < self.max_position and not self.stop_flag:
+            # OPEN phase: build position in self.direction on GRVT, hedge opposite on Lighter
+            open_side = self.direction
+            while ((self.grvt_position < self.max_position) if open_side == 'buy'
+                   else (self.grvt_position > -1 * self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.grvt_position = await self.get_grvt_position()
-                self.logger.info(f"Buying up to {self.max_position} | GRVT position: {self.grvt_position} | Lighter position: {self.lighter_position}")
+                self.logger.info(f"{open_side.capitalize()}ing up to "
+                                 f"{'-' if open_side == 'sell' else ''}{self.max_position} | "
+                                 f"GRVT position: {self.grvt_position} | Lighter position: {self.lighter_position}")
                 if abs(self.grvt_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.grvt_position + self.lighter_position}")
                     sys.exit(1)
@@ -1012,9 +1020,7 @@ class HedgeBot:
                 self.order_execution_complete = False
                 self.waiting_for_lighter_fill = False
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'buy'
-                    await self.place_grvt_post_only_order(side, self.order_quantity)
+                    await self.place_grvt_post_only_order(open_side, self.order_quantity)
                 except Exception as e:
                     self.logger.error(f"⚠️ Error in trading loop: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
@@ -1044,29 +1050,35 @@ class HedgeBot:
                 self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                 await asyncio.sleep(self.sleep_time)
 
+            # CLOSE phase: unwind the opened position on GRVT, hedge opposite on Lighter
+            close_side = 'sell' if open_side == 'buy' else 'buy'
             exit_after_next_trade = False
-            while self.grvt_position > -1*self.max_position and not self.stop_flag:
+            while ((self.grvt_position > -1*self.max_position) if close_side == 'sell'
+                   else (self.grvt_position < self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.grvt_position = await self.get_grvt_position()
-                self.logger.info(f"Selling up to -{self.max_position} | GRVT position: {self.grvt_position} | Lighter position: {self.lighter_position}")
+                self.logger.info(f"{close_side.capitalize()}ing back from "
+                                 f"{'-' if close_side == 'sell' else ''}{self.max_position} | "
+                                 f"GRVT position: {self.grvt_position} | Lighter position: {self.lighter_position}")
                 if abs(self.grvt_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.grvt_position + self.lighter_position}")
                     self.stop_flag = True
                     break
 
                 if iterations == self.iterations:
-                    if self.grvt_position>0 and self.grvt_position <= self.order_quantity:
+                    # Final iteration: unwind whatever remains so we end flat
+                    if close_side == 'sell' and 0 < self.grvt_position <= self.order_quantity:
+                        exit_after_next_trade = True
+                    elif close_side == 'buy' and -self.order_quantity <= self.grvt_position < 0:
                         exit_after_next_trade = True
 
                 self.order_execution_complete = False
                 self.waiting_for_lighter_fill = False
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'sell'
                     if exit_after_next_trade:
-                        await self.place_grvt_post_only_order(side, abs(self.grvt_position))
+                        await self.place_grvt_post_only_order(close_side, abs(self.grvt_position))
                     else:
-                        await self.place_grvt_post_only_order(side, self.order_quantity)
+                        await self.place_grvt_post_only_order(close_side, self.order_quantity)
                 except Exception as e:
                     self.logger.error(f"⚠️ Error in trading loop: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
@@ -1087,7 +1099,7 @@ class HedgeBot:
                     if time.time() - start_time > 180:
                         self.logger.error("❌ Timeout waiting for trade completion")
                         break
-                
+
                 if exit_after_next_trade:
                     self.logger.info("Position back to zero. Done! Exiting...")
                     break

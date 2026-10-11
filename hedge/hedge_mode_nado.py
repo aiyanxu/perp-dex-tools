@@ -34,7 +34,7 @@ class Config:
 class HedgeBot:
     """Trading bot that places post-only orders on Nado and hedges with market orders on Lighter."""
 
-    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0')):
+    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, max_position: Decimal = Decimal('0'), direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
@@ -42,10 +42,13 @@ class HedgeBot:
         self.iterations = iterations
         self.sleep_time = sleep_time
         self.current_order = {}
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         if max_position == Decimal('0'):
             self.max_position = order_quantity
         else:
-            self.max_position = max_position        
+            self.max_position = max_position
 
         # Initialize logging to file
         os.makedirs("logs", exist_ok=True)
@@ -908,10 +911,15 @@ class HedgeBot:
             self.logger.info(f"🔄 Trading loop iteration {iterations}")
             self.logger.info("-----------------------------------------------")
 
-            while self.nado_position < self.max_position and not self.stop_flag:
+            # OPEN phase: build position in self.direction on Nado, hedge opposite on Lighter
+            open_side = self.direction
+            while ((self.nado_position < self.max_position) if open_side == 'buy'
+                   else (self.nado_position > -1 * self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.nado_position = await self.get_nado_position()
-                self.logger.info(f"Buying up to {self.max_position} | Nado position: {self.nado_position} | Lighter position: {self.lighter_position}")
+                self.logger.info(f"{open_side.capitalize()}ing up to "
+                                 f"{'-' if open_side == 'sell' else ''}{self.max_position} | "
+                                 f"Nado position: {self.nado_position} | Lighter position: {self.lighter_position}")
                 if abs(self.nado_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.nado_position + self.lighter_position}")
                     sys.exit(1)
@@ -919,80 +927,84 @@ class HedgeBot:
                 self.order_execution_complete = False
                 self.waiting_for_lighter_fill = False
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'buy'
-                    filled_size, filled_price = await self.place_nado_post_only_order(side, self.order_quantity)
+                    filled_size, filled_price = await self.place_nado_post_only_order(open_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[Nado] [{side}] [CANCELLED]")
+                        self.logger.info(f"[Nado] [{open_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing nado post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[Nado] [{side}] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[Nado] [{open_side}] [FILLED]: {filled_size} @ {filled_price}")
                 # Log Nado trade to CSV
                 self.log_trade_to_csv(
                     exchange='Nado',
-                    side='buy',
+                    side=open_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.nado_position += filled_size
-
-                await self.place_lighter_market_order(
-                    'sell',
-                    abs(filled_size)
-                )
+                if open_side == 'buy':
+                    self.nado_position += filled_size
+                    await self.place_lighter_market_order('sell', abs(filled_size))
+                else:
+                    self.nado_position -= abs(filled_size)
+                    await self.place_lighter_market_order('buy', abs(filled_size))
 
             if self.sleep_time > 0:
                 self.logger.info(f"💤 Sleeping {self.sleep_time} seconds ...")
                 await asyncio.sleep(self.sleep_time)
 
+            # CLOSE phase: unwind the opened position on Nado, hedge opposite on Lighter
+            close_side = 'sell' if open_side == 'buy' else 'buy'
             exit_after_next_trade = False
-            while self.nado_position > -1 * self.max_position and not self.stop_flag:
+            while ((self.nado_position > -1 * self.max_position) if close_side == 'sell'
+                   else (self.nado_position < self.max_position)) and not self.stop_flag:
                 self.lighter_position = self.get_lighter_position()
                 self.nado_position = await self.get_nado_position()
-                self.logger.info(f"Selling up to -{self.max_position} | Nado position: {self.nado_position} | Lighter position: {self.lighter_position}")
+                self.logger.info(f"{close_side.capitalize()}ing back from "
+                                 f"{'-' if close_side == 'sell' else ''}{self.max_position} | "
+                                 f"Nado position: {self.nado_position} | Lighter position: {self.lighter_position}")
                 if abs(self.nado_position + self.lighter_position) > self.order_quantity*2:
                     self.logger.error(f"❌ Position diff is too large: {self.nado_position + self.lighter_position}")
                     sys.exit(1)
 
                 if iterations == self.iterations:
-                    if self.nado_position>0 and self.nado_position <= self.order_quantity:
+                    # Final iteration: unwind whatever remains so we end flat
+                    if close_side == 'sell' and 0 < self.nado_position <= self.order_quantity:
+                        exit_after_next_trade = True
+                    elif close_side == 'buy' and -self.order_quantity <= self.nado_position < 0:
                         exit_after_next_trade = True
 
                 try:
-                    # Determine side based on some logic (for now, alternate)
-                    side = 'sell'
                     if exit_after_next_trade:
-                        filled_size, filled_price = await self.place_nado_post_only_order(side, abs(self.nado_position))
+                        filled_size, filled_price = await self.place_nado_post_only_order(close_side, abs(self.nado_position))
                     else:
-                        filled_size, filled_price = await self.place_nado_post_only_order(side, self.order_quantity)
+                        filled_size, filled_price = await self.place_nado_post_only_order(close_side, self.order_quantity)
                     if filled_size == 0:
-                        self.logger.info(f"[Nado] [{side}] [CANCELLED]")
+                        self.logger.info(f"[Nado] [{close_side}] [CANCELLED]")
                         continue
                 except Exception as e:
                     self.logger.error(f"⚠️ Error placing nado post only order: {e}")
                     self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
                     continue
 
-                self.logger.info(f"[Nado] [{side}] [FILLED]: {filled_size} @ {filled_price}")
+                self.logger.info(f"[Nado] [{close_side}] [FILLED]: {filled_size} @ {filled_price}")
                 # Log Nado trade to CSV
                 self.log_trade_to_csv(
                     exchange='Nado',
-                    side='sell',
+                    side=close_side,
                     price=str(filled_price),
                     quantity=str(filled_size)
                 )
 
-                self.nado_position -= abs(filled_size)
-
-                await self.place_lighter_market_order(
-                    'buy',
-                    abs(filled_size)
-                )
+                if close_side == 'sell':
+                    self.nado_position -= abs(filled_size)
+                    await self.place_lighter_market_order('buy', abs(filled_size))
+                else:
+                    self.nado_position += filled_size
+                    await self.place_lighter_market_order('sell', abs(filled_size))
 
                 if exit_after_next_trade:
                     self.logger.info("Position back to zero. Done! Exiting...")

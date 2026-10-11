@@ -35,13 +35,16 @@ class Config:
 class HedgeBot:
     """Trading bot that places post-only orders on Extended and hedges with market orders on Lighter."""
 
-    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0):
+    def __init__(self, ticker: str, order_quantity: Decimal, fill_timeout: int = 5, iterations: int = 20, sleep_time: int = 0, direction: str = 'buy'):
         self.ticker = ticker
         self.order_quantity = order_quantity
         self.fill_timeout = fill_timeout
         self.lighter_order_filled = False
         self.iterations = iterations
         self.sleep_time = sleep_time
+        # Opening direction on the primary exchange: 'buy' builds a long
+        # position first, 'sell' builds a short position first.
+        self.direction = direction.lower()
         self.extended_position = Decimal('0')
         self.lighter_position = Decimal('0')
         self.current_order = {}
@@ -1110,9 +1113,8 @@ class HedgeBot:
             self.order_execution_complete = False
             self.waiting_for_lighter_fill = False
             try:
-                # Determine side based on some logic (for now, alternate)
-                side = 'buy'
-                await self.place_extended_post_only_order(side, self.order_quantity)
+                # STEP 1 opens in self.direction ('buy' -> long on Extended)
+                await self.place_extended_post_only_order(self.direction, self.order_quantity)
             except Exception as e:
                 self.logger.error(f"⚠️ Error in trading loop: {e}")
                 self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
@@ -1147,9 +1149,9 @@ class HedgeBot:
             self.order_execution_complete = False
             self.waiting_for_lighter_fill = False
             try:
-                # Determine side based on some logic (for now, alternate)
-                side = 'sell'
-                await self.place_extended_post_only_order(side, self.order_quantity)
+                # STEP 2 unwinds STEP 1 (opposite side)
+                close_side = 'sell' if self.direction == 'buy' else 'buy'
+                await self.place_extended_post_only_order(close_side, self.order_quantity)
             except Exception as e:
                 self.logger.error(f"⚠️ Error in trading loop: {e}")
                 self.logger.error(f"⚠️ Full traceback: {traceback.format_exc()}")
