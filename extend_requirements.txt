@@ -1,0 +1,2 @@
+# Extended exchange SDK (pulls in fast-stark-crypto for StarkEx signing)
+x10-python-trading-starknet==0.0.10

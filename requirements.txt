@@ -25,8 +25,7 @@ tenacity>=9.1.2
 # Lighter exchange SDK
 lighter-sdk==1.0.4
 
-# Extended exchange SDK
-x10-python-trading-starknet==0.0.10
+# Extended exchange SDK is installed from extend_requirements.txt
 
 # Nado Protocol SDK is installed from nado_requirements.txt
 
