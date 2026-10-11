@@ -14,10 +14,11 @@ from helpers.logger import TradingLogger
 
 # Import official Lighter SDK for API client
 import lighter
-from lighter import SignerClient, ApiClient, Configuration
+from lighter import ApiClient, Configuration
 
 # Import custom WebSocket implementation
 from .lighter_custom_websocket import LighterCustomWebSocketManager
+from helpers.lighter_ws import build_lighter_base_url, create_lighter_signer_client_for_env
 
 # Suppress Lighter SDK debug logs
 logging.getLogger('lighter').setLevel(logging.WARNING)
@@ -38,7 +39,7 @@ class LighterClient(BaseExchangeClient):
         self.api_key_private_key = os.getenv('API_KEY_PRIVATE_KEY')
         self.account_index = int(os.getenv('LIGHTER_ACCOUNT_INDEX', '0'))
         self.api_key_index = int(os.getenv('LIGHTER_API_KEY_INDEX', '0'))
-        self.base_url = "https://mainnet.zklighter.elliot.ai"
+        self.base_url = build_lighter_base_url()
 
         if not self.api_key_private_key:
             raise ValueError("API_KEY_PRIVATE_KEY must be set in environment variables")
@@ -102,8 +103,7 @@ class LighterClient(BaseExchangeClient):
         """Initialize the Lighter client using official SDK."""
         if self.lighter_client is None:
             try:
-                self.lighter_client = SignerClient(
-                    url=self.base_url,
+                self.lighter_client = create_lighter_signer_client_for_env(
                     account_index=self.account_index,
                     api_private_keys={self.api_key_index: self.api_key_private_key}
                 )

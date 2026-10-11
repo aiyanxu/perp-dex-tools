@@ -34,7 +34,11 @@ ASTER_ACCOUNT_ADDRESS=your_account_wallet_address_here
 ASTER_PRIVATE_KEY=your_api_wallet_private_key_here
 
 # Lighter Configuration
+# LIGHTER_ENV selects the deployment: mainnet (default) or rh (Lighter on
+# Robinhood Chain). Accounts/balances/API keys/nonces are fully separate per
+# deployment, and the signer chain id differs (mainnet 304, rh 466324).
 API_KEY_PRIVATE_KEY=your_api_key_private_key_here
+LIGHTER_ENV=mainnet  # or rh
 LIGHTER_ACCOUNT_INDEX=0
 LIGHTER_API_KEY_INDEX=0
 

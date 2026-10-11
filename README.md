@@ -374,6 +374,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 #### Lighter 配置
 
 - `API_KEY_PRIVATE_KEY`: Lighter API 私钥
+- `LIGHTER_ENV`: 部署环境，`mainnet`（默认）或 `rh`（Robinhood Chain 上的 Lighter / lighter-rh）。两个部署的账户、余额、API Key、nonce 完全独立，签名链 ID 也不同（mainnet 304，rh 466324）
 - `LIGHTER_ACCOUNT_INDEX`: Lighter 账户索引
 - `LIGHTER_API_KEY_INDEX`: Lighter API 密钥索引
 
@@ -411,7 +412,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 
 **获取 LIGHTER_ACCOUNT_INDEX 的方法**：
 
-1. 在下面的网址最后加上你的钱包地址：
+1. 在下面的网址最后加上你的钱包地址（`LIGHTER_ENV=rh` 时把域名换成 `https://api.rh.lighter.xyz`）：
 
    ```
    https://mainnet.zklighter.elliot.ai/api/v1/account?by=l1_address&value=
@@ -419,7 +420,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 
 2. 在浏览器中打开这个网址
 
-3. 在结果中搜索 "account_index" - 如果你有子账户，会有多个 account_index，短的那个是你主账户的，长的是你的子账户。
+3. 在结果中搜索 "account_index" - 如果你有子账户，会有多个 account_index，短的那个是你主账户的，长的是你的子账户。注意两个部署的账户索引完全独立，不通用。
 
 ### 命令行参数
 

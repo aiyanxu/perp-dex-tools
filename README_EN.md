@@ -348,6 +348,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 #### Lighter Configuration
 
 - `API_KEY_PRIVATE_KEY`: Your Lighter API private key
+- `LIGHTER_ENV`: Deployment to use, `mainnet` (default) or `rh` (Lighter on Robinhood Chain / lighter-rh). Accounts, balances, API keys and nonces are fully separate per deployment, and the signing chain id differs (mainnet 304, rh 466324)
 - `LIGHTER_ACCOUNT_INDEX`: Lighter account index
 - `LIGHTER_API_KEY_INDEX`: Lighter API key index
 
@@ -380,7 +381,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 
 **How to get LIGHTER_ACCOUNT_INDEX**:
 
-1. Add your wallet address to the end of the following URL:
+1. Add your wallet address to the end of the following URL (use `https://api.rh.lighter.xyz` as the host when `LIGHTER_ENV=rh`):
 
    ```
    https://mainnet.zklighter.elliot.ai/api/v1/account?by=l1_address&value=
@@ -388,7 +389,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 
 2. Open this URL in your browser
 
-3. Search for "account_index" in the results - if you have subaccounts, there will be multiple account_index values. The shorter one is your main account, and the longer ones are your subaccounts.
+3. Search for "account_index" in the results - if you have subaccounts, there will be multiple account_index values. The shorter one is your main account, and the longer ones are your subaccounts. Note that account indexes are fully separate per deployment and do not carry over.
 
 ### Command Line Arguments
 

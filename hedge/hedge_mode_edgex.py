@@ -11,13 +11,14 @@ import csv
 from decimal import Decimal
 from typing import Tuple
 
-from lighter.signer_client import SignerClient
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams
 import websockets
 from datetime import datetime
 import pytz
 import dotenv
-from helpers.lighter_ws import build_lighter_ws_url, lighter_ws_connect_kwargs
+from helpers.lighter_ws import (build_lighter_ws_url, build_lighter_base_url,
+                                create_lighter_signer_client_for_env,
+                                lighter_ws_connect_kwargs)
 
 dotenv.load_dotenv()
 
@@ -127,7 +128,7 @@ class HedgeBot:
         self.order_execution_complete = False
 
         # Lighter API configuration
-        self.lighter_base_url = "https://mainnet.zklighter.elliot.ai"
+        self.lighter_base_url = build_lighter_base_url()
         self.account_index = int(os.getenv('LIGHTER_ACCOUNT_INDEX'))
         self.api_key_index = int(os.getenv('LIGHTER_API_KEY_INDEX'))
 
@@ -201,8 +202,7 @@ class HedgeBot:
             if not api_key_private_key:
                 raise Exception("API_KEY_PRIVATE_KEY environment variable not set")
 
-            self.lighter_client = SignerClient(
-                url=self.lighter_base_url,
+            self.lighter_client = create_lighter_signer_client_for_env(
                 account_index=self.account_index,
                 api_private_keys={self.api_key_index: api_key_private_key}
             )
@@ -1040,7 +1040,7 @@ class HedgeBot:
             self.logger.error(f"Could not setup edgeX WebSocket handlers: {e}")
 
     def get_lighter_position(self):
-        url = "https://mainnet.zklighter.elliot.ai/api/v1/account"
+        url = f"{self.lighter_base_url}/api/v1/account"
         headers = {"accept": "application/json"}
 
         current_position = None

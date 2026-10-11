@@ -12,7 +12,6 @@ import csv
 from decimal import Decimal
 from typing import Tuple
 
-from lighter.signer_client import SignerClient
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from exchanges.arcus import ArcusClient
@@ -20,7 +19,9 @@ import websockets
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
-from helpers.lighter_ws import build_lighter_ws_url, lighter_ws_connect_kwargs
+from helpers.lighter_ws import (build_lighter_ws_url, build_lighter_base_url,
+                                create_lighter_signer_client_for_env,
+                                lighter_ws_connect_kwargs)
 
 load_dotenv()
 
@@ -140,7 +141,7 @@ class HedgeBot:
         self._last_dms_refresh = 0.0
 
         # Lighter API configuration
-        self.lighter_base_url = "https://mainnet.zklighter.elliot.ai"
+        self.lighter_base_url = build_lighter_base_url()
         self.account_index = int(os.getenv('LIGHTER_ACCOUNT_INDEX', '0'))
         self.api_key_index = int(os.getenv('LIGHTER_API_KEY_INDEX', '0'))
 
@@ -408,8 +409,7 @@ class HedgeBot:
             if not api_key_private_key:
                 raise Exception("API_KEY_PRIVATE_KEY environment variable not set")
 
-            self.lighter_client = SignerClient(
-                url=self.lighter_base_url,
+            self.lighter_client = create_lighter_signer_client_for_env(
                 account_index=self.account_index,
                 api_private_keys={self.api_key_index: api_key_private_key}
             )
@@ -657,7 +657,7 @@ class HedgeBot:
 
     def get_lighter_position(self) -> Decimal:
         """Get Lighter position via REST API."""
-        url = "https://mainnet.zklighter.elliot.ai/api/v1/account"
+        url = f"{self.lighter_base_url}/api/v1/account"
         headers = {"accept": "application/json"}
         parameters = {"by": "index", "value": self.account_index}
 
