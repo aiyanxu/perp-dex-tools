@@ -126,6 +126,17 @@ You will get 1.3x points boost; rebates (auto rebates system is expected to be l
    pip install -r apex_requirements.txt
    ```
 
+   **Nado users**: if you want to use the nado exchange, install the nado-specific dependencies additionally:
+   Activate the virtual environment (you need to activate it every time you use the script):
+
+   ```bash
+   source env/bin/activate  # Windows: env\Scripts\activate
+   ```
+
+   ```bash
+   pip install -r nado_requirements.txt
+   ```
+
 4. **Set up environment variables**:
    Create a `.env` file in the project root directory and use env_example.txt as a template to modify with your API keys.
 

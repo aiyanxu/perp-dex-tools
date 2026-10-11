@@ -1,0 +1,2 @@
+# Nado Protocol SDK
+git+https://github.com/your-quantguy/nado-python-sdk.git@7728e97dd030cf744f08afdc0637f7e63b7527e3
