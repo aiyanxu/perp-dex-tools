@@ -37,8 +37,9 @@ class Config:
 class HedgeBot:
     """Trading bot that places post-only orders on Arcus and hedges with market orders on Lighter."""
 
-    # Arcus offset: 3 basis points (bps) from mark price
-    ARCUS_OFFSET_BPS = Decimal('0.0003')  # 3 bps = 0.03%
+    # Maker offset from mark price, in basis points: ARCUS_MAKER_OFFSET_BPS
+    # in .env (e.g. 5 = 0.05%). Default 3 bps.
+    ARCUS_OFFSET_BPS = Decimal((os.getenv('ARCUS_MAKER_OFFSET_BPS') or '3').strip() or '3') / Decimal('10000')
 
     # Dead man's switch: refresh every 45s, deadline 60s out (must be 5s-5min ahead)
     DMS_REFRESH_INTERVAL = 45
@@ -503,20 +504,21 @@ class HedgeBot:
 
     async def place_arcus_post_only_order(self, side: str, quantity: Decimal) -> Tuple[Decimal, Decimal]:
         """
-        Place a post-only (ALO) order on Arcus with 3 bps offset from mark price.
+        Place a post-only (ALO) order on Arcus with a maker offset (ARCUS_MAKER_OFFSET_BPS,
+        default 3 bps) from mark price.
         Returns (filled_size, order_price); filled_size == 0 means no fill.
         """
         if not self.arcus_client:
             raise Exception("Arcus client not initialized")
 
         self.arcus_order_status = None
-        self.logger.info(f"[Arcus] [{side}] Placing POST-ONLY order with 3 bps offset from mark price")
+        self.logger.info(f"[Arcus] [{side}] Placing POST-ONLY order with {self.ARCUS_OFFSET_BPS * 10000} bps offset from mark price")
 
         # Get mark price and BBO prices
         mark_price = await self.fetch_arcus_mark_price()
         best_bid, best_ask = await self.fetch_arcus_bbo_prices()
 
-        # Calculate price with 3 bps offset from mark price
+        # Calculate price with maker offset from mark price
         if side.lower() == 'buy':
             order_price = mark_price * (Decimal('1') - self.ARCUS_OFFSET_BPS)
         else:

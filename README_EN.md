@@ -379,6 +379,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `ARCUS_API_PRIVATE_KEY`: Ed25519 API signing private key (32-byte hex, shown once when creating the API key in the web app)
 - `ARCUS_ENVIRONMENT`: Environment (mainnet or testnet, default: mainnet)
 - `ARCUS_ACCOUNT_INDEX`: Subaccount index (default: 0)
+- `ARCUS_MAKER_OFFSET_BPS`: Hedge-mode maker offset from mark price, in basis points (e.g. 5 = 0.05%, default: 3)
 
 **How to get LIGHTER_ACCOUNT_INDEX**:
 

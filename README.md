@@ -410,6 +410,7 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `ARCUS_API_PRIVATE_KEY`: Ed25519 API 签名私钥（32 字节 hex，在网页端创建 API Key 时仅显示一次）
 - `ARCUS_ENVIRONMENT`: 网络环境（mainnet 或 testnet，默认：mainnet）
 - `ARCUS_ACCOUNT_INDEX`: 子账户索引（默认：0）
+- `ARCUS_MAKER_OFFSET_BPS`: 对冲模式 maker 单距 mark 价的偏移，单位为基点（如 5 = 0.05%，默认：3）
 
 **获取 LIGHTER_ACCOUNT_INDEX 的方法**：
 
