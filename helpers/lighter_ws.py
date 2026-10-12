@@ -110,3 +110,64 @@ def create_lighter_signer_client_for_env(account_index: int, api_private_keys: d
         api_private_keys=api_private_keys,
         chain_id=LIGHTER_MAINNET_CHAIN_ID,
     )
+
+
+def build_lighter_base_url_for_deployment(deployment: str) -> str:
+    """REST base URL for an explicit deployment ('mainnet' or 'rh').
+
+    Independent of the global LIGHTER_ENV, so one process can talk to both
+    deployments at once. Overridable per deployment via
+    LIGHTER_MAINNET_BASE_URL / LIGHTER_RH_BASE_URL.
+    """
+    if deployment == "rh":
+        override = os.getenv("LIGHTER_RH_BASE_URL", "").strip()
+        return override or LIGHTER_RH_URL
+    if deployment == "mainnet":
+        override = os.getenv("LIGHTER_MAINNET_BASE_URL", "").strip()
+        return override or LIGHTER_MAINNET_URL
+    raise ValueError(f"Unknown Lighter deployment: {deployment}")
+
+
+def build_lighter_ws_url_for_deployment(deployment: str) -> str:
+    """WebSocket URL for an explicit deployment ('mainnet' or 'rh')."""
+    if deployment == "rh":
+        override = os.getenv("LIGHTER_RH_WS_URL", "").strip()
+        default_url = LIGHTER_RH_WS_URL
+    elif deployment == "mainnet":
+        override = os.getenv("LIGHTER_MAINNET_WS_URL", "").strip()
+        default_url = LIGHTER_MAINNET_WS_URL
+    else:
+        raise ValueError(f"Unknown Lighter deployment: {deployment}")
+
+    base_url = override or default_url
+
+    use_server_pings = _is_truthy(os.getenv("LIGHTER_WS_SERVER_PINGS", "false"))
+    if not use_server_pings:
+        return base_url
+
+    separator = "&" if "?" in base_url else "?"
+    return f"{base_url}{separator}server_pings=true"
+
+
+def create_lighter_signer_client_for_deployment(deployment: str, account_index: int,
+                                                api_private_keys: dict, base_url: str = ""):
+    """Create a SignerClient pinned to an explicit deployment ('mainnet' or 'rh').
+
+    Unlike create_lighter_signer_client_for_env this does not depend on the
+    global LIGHTER_ENV, so a process can hold clients for both deployments
+    at once (e.g. mainnet maker + rh taker hedge mode).
+    """
+    if deployment == "rh":
+        chain_id = LIGHTER_RH_CHAIN_ID
+    elif deployment == "mainnet":
+        chain_id = LIGHTER_MAINNET_CHAIN_ID
+    else:
+        raise ValueError(f"Unknown Lighter deployment: {deployment}")
+
+    url = base_url or build_lighter_base_url_for_deployment(deployment)
+    return create_lighter_signer_client(
+        url=url,
+        account_index=account_index,
+        api_private_keys=api_private_keys,
+        chain_id=chain_id,
+    )

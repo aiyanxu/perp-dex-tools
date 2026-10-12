@@ -319,6 +319,8 @@ python runbot.py --exchange extended --ticker ETH --quantity 0.1 --take-profit 0
 3. **平仓阶段**：在选定交易所下另一个 maker 订单平仓
 4. **对冲平仓**：在 Lighter 下市价订单平仓
 
+`--exchange lighter` 是一个特殊变体：maker 单下在 Lighter mainnet（post-only，距 BBO 偏移 `LIGHTER_MAKER_OFFSET_BPS`），taker 对冲单下在 lighter-rh（IOC 市价单），两个部署的账户完全独立。
+
 ### 对冲模式优势
 
 - **风险降低**：通过同时持有相反头寸，降低单边市场风险
@@ -346,11 +348,14 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 
 # 运行 BTC 对冲模式（Arcus）
 python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-position 0.05
+
+# 运行 BTC 对冲模式（Lighter mainnet maker + lighter-rh taker）
+python hedge_mode.py --exchange lighter --ticker BTC --size 0.003 --iter 20 --max-position 0.05
 ```
 
 ### 对冲模式参数
 
-- `--exchange`: 主要交易所（支持 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus'）
+- `--exchange`: 主要交易所（支持 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus', 'lighter'）
 - `--ticker`: 交易对符号（如 BTC, ETH）
 - `--size`: 每笔订单数量
 - `--iter`: 交易循环次数
@@ -400,6 +405,13 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `LIGHTER_ENV`: 部署环境，`mainnet`（默认）或 `rh`（Robinhood Chain 上的 Lighter / lighter-rh）。两个部署的账户、余额、API Key、nonce 完全独立，签名链 ID 也不同（mainnet 304，rh 466324）
 - `LIGHTER_ACCOUNT_INDEX`: Lighter 账户索引
 - `LIGHTER_API_KEY_INDEX`: Lighter API 密钥索引
+
+对冲模式 `--exchange lighter`（Lighter mainnet maker + lighter-rh taker）支持按部署覆盖凭据，未设置的项回退到上面的共享配置：
+
+- `LIGHTER_MAINNET_API_KEY_PRIVATE_KEY` / `LIGHTER_RH_API_KEY_PRIVATE_KEY`: 各部署的 API 私钥
+- `LIGHTER_MAINNET_ACCOUNT_INDEX` / `LIGHTER_RH_ACCOUNT_INDEX`: 各部署的账户索引
+- `LIGHTER_MAINNET_API_KEY_INDEX` / `LIGHTER_RH_API_KEY_INDEX`: 各部署的 API 密钥索引
+- `LIGHTER_MAKER_OFFSET_BPS`: 对冲模式 maker 单距 BBO 的偏移，单位为基点（如 3 = 0.03%，默认：3）
 
 #### GRVT 配置
 

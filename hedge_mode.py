@@ -18,6 +18,8 @@ Supported exchanges:
     - nado: Uses HedgeBot from hedge_mode_nado.py (Nado + Lighter)
     - standx: Uses HedgeBot from hedge_mode_standx.py (StandX + Lighter)
     - arcus: Uses HedgeBot from hedge_mode_arcus.py (Arcus + Lighter)
+    - lighter: Uses HedgeBot from hedge_mode_lighter.py
+      (Lighter mainnet maker + lighter-rh taker)
 
 Cross-platform compatibility:
     - Works on Linux, macOS, and Windows
@@ -47,11 +49,12 @@ Examples:
     python hedge_mode.py --exchange nado --ticker BTC --size 0.003 --iter 20 --max-position 0.05
     python hedge_mode.py --exchange standx --ticker BTC --size 0.003 --iter 20 --max-position 0.05
     python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-position 0.05
+    python hedge_mode.py --exchange lighter --ticker BTC --size 0.003 --iter 20 --max-position 0.05
         """
     )
-    
+
     parser.add_argument('--exchange', type=str, required=True,
-                        help='Exchange to use (backpack, extended, apex, grvt, or edgex)')
+                        help='Exchange to use (backpack, extended, apex, grvt, edgex, nado, standx, arcus, or lighter)')
     parser.add_argument('--ticker', type=str, default='BTC',
                         help='Ticker symbol (default: BTC)')
     parser.add_argument('--size', type=str, required=True,
@@ -76,7 +79,7 @@ Examples:
 
 def validate_exchange(exchange):
     """Validate that the exchange is supported."""
-    supported_exchanges = ['backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus']
+    supported_exchanges = ['backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus', 'lighter']
     if exchange.lower() not in supported_exchanges:
         print(f"Error: Unsupported exchange '{exchange}'")
         print(f"Supported exchanges: {', '.join(supported_exchanges)}")
@@ -112,6 +115,9 @@ def get_hedge_bot_class(exchange, v2=False):
             return HedgeBot
         elif exchange.lower() == 'arcus':
             from hedge.hedge_mode_arcus import HedgeBot
+            return HedgeBot
+        elif exchange.lower() == 'lighter':
+            from hedge.hedge_mode_lighter import HedgeBot
             return HedgeBot
         else:
             raise ValueError(f"Unsupported exchange: {exchange}")
@@ -159,7 +165,7 @@ async def main():
                 fill_timeout=args.fill_timeout,
                 max_position=args.max_position
             )
-        elif args.exchange in ['backpack', 'edgex', 'nado', 'grvt', 'standx', 'arcus']:
+        elif args.exchange in ['backpack', 'edgex', 'nado', 'grvt', 'standx', 'arcus', 'lighter']:
             bot = HedgeBotClass(
                 ticker=args.ticker.upper(),
                 order_quantity=Decimal(args.size),

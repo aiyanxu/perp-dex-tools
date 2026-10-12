@@ -41,6 +41,19 @@ API_KEY_PRIVATE_KEY=your_api_key_private_key_here
 LIGHTER_ENV=mainnet  # or rh
 LIGHTER_ACCOUNT_INDEX=0
 LIGHTER_API_KEY_INDEX=0
+# Per-deployment overrides for hedge mode (Lighter mainnet maker + lighter-rh
+# taker, hedge_mode.py --exchange lighter). Each falls back to the shared
+# API_KEY_PRIVATE_KEY / LIGHTER_ACCOUNT_INDEX / LIGHTER_API_KEY_INDEX above
+# when unset - set them when the two deployments use different accounts.
+#LIGHTER_MAINNET_API_KEY_PRIVATE_KEY=
+#LIGHTER_RH_API_KEY_PRIVATE_KEY=
+#LIGHTER_MAINNET_ACCOUNT_INDEX=0
+#LIGHTER_RH_ACCOUNT_INDEX=0
+#LIGHTER_MAINNET_API_KEY_INDEX=0
+#LIGHTER_RH_API_KEY_INDEX=0
+# Maker offset from BBO for lighter-hedge-mode post-only orders, in basis
+# points (e.g. 3 = 0.03%). Default 3.
+#LIGHTER_MAKER_OFFSET_BPS=3
 
 # Extended Configuration
 EXTENDED_API_KEY=your_extended_api_key

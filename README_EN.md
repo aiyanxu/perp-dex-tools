@@ -300,6 +300,8 @@ The new Hedge Mode (`hedge_mode.py`) is an trading strategy that reduces risk by
 3. **Closing Phase**: Place another maker order at selected exchange to close position
 4. **Hedge Closing**: Place market order at Lighter to close hedge position
 
+`--exchange lighter` is a special variant: the maker order is placed on Lighter mainnet (post-only, offset from BBO by `LIGHTER_MAKER_OFFSET_BPS`), and the taker hedge order is placed on lighter-rh (IOC market order). Accounts on the two deployments are fully separate.
+
 ### Hedge Mode Usage Examples
 
 ```bash
@@ -320,11 +322,14 @@ python hedge_mode.py --exchange edgex --ticker BTC --size 0.001 --iter 20
 
 # Run BTC hedge mode with Arcus
 python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-position 0.05
+
+# Run BTC hedge mode (Lighter mainnet maker + lighter-rh taker)
+python hedge_mode.py --exchange lighter --ticker BTC --size 0.003 --iter 20 --max-position 0.05
 ```
 
 ### Hedge Mode Parameters
 
-- `--exchange`: Primary exchange (supports 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus')
+- `--exchange`: Primary exchange (supports 'backpack', 'extended', 'apex', 'grvt', 'edgex', 'nado', 'standx', 'arcus', 'lighter')
 - `--ticker`: Trading pair symbol (e.g., BTC, ETH)
 - `--size`: Order quantity per trade
 - `--iter`: Number of trading cycles
@@ -374,6 +379,13 @@ python hedge_mode.py --exchange arcus --ticker BTC --size 0.003 --iter 20 --max-
 - `LIGHTER_ENV`: Deployment to use, `mainnet` (default) or `rh` (Lighter on Robinhood Chain / lighter-rh). Accounts, balances, API keys and nonces are fully separate per deployment, and the signing chain id differs (mainnet 304, rh 466324)
 - `LIGHTER_ACCOUNT_INDEX`: Lighter account index
 - `LIGHTER_API_KEY_INDEX`: Lighter API key index
+
+Hedge mode `--exchange lighter` (Lighter mainnet maker + lighter-rh taker) supports per-deployment credential overrides; unset values fall back to the shared config above:
+
+- `LIGHTER_MAINNET_API_KEY_PRIVATE_KEY` / `LIGHTER_RH_API_KEY_PRIVATE_KEY`: API private key per deployment
+- `LIGHTER_MAINNET_ACCOUNT_INDEX` / `LIGHTER_RH_ACCOUNT_INDEX`: Account index per deployment
+- `LIGHTER_MAINNET_API_KEY_INDEX` / `LIGHTER_RH_API_KEY_INDEX`: API key index per deployment
+- `LIGHTER_MAKER_OFFSET_BPS`: Offset from BBO for hedge-mode post-only maker orders, in basis points (e.g. 3 = 0.03%, default: 3)
 
 #### GRVT Configuration
 
